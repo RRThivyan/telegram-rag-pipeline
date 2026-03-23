@@ -1,176 +1,192 @@
-# 🤖 Telegram RAG Knowledge Bot (OpenAI Edition)
+<div align="center">
 
-A lightweight, production-grade Telegram bot that answers questions from a local
-knowledge base using **Retrieval-Augmented Generation (RAG)** — powered entirely
-by OpenAI. No PyTorch, no Hugging Face, no local model downloads.
+<img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white"/>
+<img src="https://img.shields.io/badge/OpenAI-GPT--3.5%20%7C%20Embeddings-412991?style=for-the-badge&logo=openai&logoColor=white"/>
+<img src="https://img.shields.io/badge/Telegram-Bot%20API-26A5E4?style=for-the-badge&logo=telegram&logoColor=white"/>
+<img src="https://img.shields.io/badge/SQLite-Vector%20Store-003B57?style=for-the-badge&logo=sqlite&logoColor=white"/>
+<img src="https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white"/>
+
+<br/><br/>
+
+# telegram-rag-pipeline
+
+### A production-grade Retrieval-Augmented Generation bot on Telegram  
+**Zero PyTorch · OpenAI-native · Runs on any machine in under 2 minutes**
+
+<br/>
+
+[Features](#-features) · [Architecture](#-architecture) · [Quick Start](#-quick-start) · [Configuration](#-configuration) · [Demo](#-example-interaction) · [Tests](#-tests)
+
+</div>
 
 ---
 
-## ✨ Features
+## Overview
 
-| Feature | Details |
+`telegram-rag-pipeline` is a fully self-contained conversational AI bot that lets users query a private knowledge base through Telegram using natural language. Instead of relying on an LLM's static training data, every query is grounded in real documents via a **Retrieval-Augmented Generation (RAG)** pipeline backed by OpenAI embeddings and a lightweight SQLite vector store.
+
+Built for portfolio demonstration but architected for production — modular, testable, and deployable via Docker with a single command.
+
+---
+
+## Features
+
+| Capability | Implementation |
 |---|---|
-| `/ask <question>` | Embed query → retrieve top-k chunks → generate answer via GPT |
-| `/summarize` | Summarise your last 3 conversation turns |
-| `/help` | Usage guide |
-| `/start` | Welcome message |
-| Message history | Last 3 user+assistant turns injected into every prompt |
-| Query caching | Semantically similar queries (cosine ≥ 0.95) served from SQLite cache |
-| Source snippets | Every answer shows which document it came from + a 200-char preview |
-| Typing indicator | Bot shows "typing…" while processing |
+| **Semantic document search** | `text-embedding-3-small` → cosine similarity over SQLite BLOB store |
+| **Grounded answer generation** | Top-k chunks injected into GPT-3.5-turbo system prompt |
+| **Conversation memory** | Last 3 user/assistant turns persisted per user in SQLite |
+| **Query caching** | Repeated/similar queries (cosine ≥ 0.95) bypass the LLM entirely |
+| **Source transparency** | Every answer cites its source document with a 200-char snippet |
+| **Bring your own docs** | Drop any `.md` or `.txt` file into `data/docs/` — auto-indexed on startup |
+| **Async bot layer** | Full async I/O with `python-telegram-bot` v20, typing indicators included |
 
----
-
-## 🏗 System Architecture
+**Bot commands**
 
 ```
-User (Telegram)
-      │
-      ▼
-┌─────────────────────────────────────────────────────┐
-│                Telegram Bot Layer                    │
-│  python-telegram-bot v20 (async)                    │
-│  Handlers: /ask  /summarize  /help  /start          │
-└──────────────────────┬──────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────┐
-│                   RAG Pipeline                       │
-│                                                      │
-│  1. embed_one(query)  ← OpenAI text-embedding-3-small│
-│  2. cache lookup      ← SQLite query_cache table    │
-│  3. similarity_search ← NumPy dot-product on blobs  │
-│  4. build_prompt      ← system + history + context  │
-│  5. OpenAI ChatCompletion  ← gpt-3.5-turbo          │
-│  6. persist history + cache                         │
-└──────────────────────┬──────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────┐
-│                SQLite (data/rag.db)                  │
-│  chunks        — text + source + vector BLOB        │
-│  query_cache   — query_vec → answer                 │
-│  user_history  — per-user conversation turns        │
-└─────────────────────────────────────────────────────┘
+/ask <question>   →  Query the knowledge base
+/summarize        →  Summarise your recent conversation
+/help             →  Usage guide
+/start            →  Welcome message
 ```
 
 ---
 
-## 🚀 Quick Start (Windows / Mac / Linux)
+## Architecture
 
-### 1. Prerequisites
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                          Telegram Client                          │
+└─────────────────────────────┬────────────────────────────────────┘
+                              │  python-telegram-bot v20 (async)
+                              ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                         Bot Handler Layer                         │
+│                                                                    │
+│   app.py  ──►  bot/handlers.py  ──►  rag/pipeline.py             │
+│   (entry)       (commands)           (orchestrator)               │
+└─────────────────────────────┬────────────────────────────────────┘
+                              │
+              ┌───────────────┼───────────────┐
+              ▼               ▼               ▼
+    ┌─────────────┐  ┌──────────────┐  ┌──────────────┐
+    │  embedder   │  │   chunker    │  │    store     │
+    │             │  │              │  │              │
+    │ OpenAI API  │  │ Sliding-     │  │ SQLite +     │
+    │ embed-3-sm  │  │ window split │  │ NumPy dot    │
+    │ 1536-dim    │  │ word overlap │  │ product sim  │
+    └──────┬──────┘  └──────────────┘  └──────┬───────┘
+           │                                   │
+           │         ┌─────────────────────────┤
+           │         │       3 tables           │
+           │         │  ┌─────────────────┐    │
+           │         │  │ chunks          │    │
+           │         │  │ query_cache     │    │
+           │         │  │ user_history    │    │
+           │         │  └─────────────────┘    │
+           │         └─────────────────────────┘
+           │
+           ▼
+    ┌─────────────┐
+    │  OpenAI     │
+    │  Chat API   │
+    │  gpt-3.5    │
+    └─────────────┘
+```
+
+**Indexing flow (startup, runs once)**
+```
+data/docs/*.md  →  chunker  →  embedder  →  SQLite (chunks table)
+```
+
+**Query flow (per /ask)**
+```
+User query  →  embed  →  cache check  →  top-k retrieval
+           →  prompt build (context + history)  →  GPT
+           →  persist history + cache  →  reply with source
+```
+
+---
+
+## Quick Start
+
+### Prerequisites
 
 - Python 3.10+
-- A Telegram bot token — get one from [@BotFather](https://t.me/BotFather)
-- An OpenAI API key — from [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
+- Telegram bot token → [@BotFather](https://t.me/BotFather)
+- OpenAI API key → [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
 
-### 2. Install dependencies
+### 1. Clone & install
 
 ```bash
-# Create virtual environment
+git clone https://github.com/RRThivyan/telegram-rag-pipeline.git
+cd telegram-rag-pipeline
+
 python -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
 
-# Activate it
-# Windows:
-venv\Scripts\activate
-# Mac / Linux:
-source venv/bin/activate
-
-# Install (fast — no torch/huggingface)
 pip install -r requirements.txt
 ```
 
-### 3. Configure environment
+> **No PyTorch. No Hugging Face.** `pip install` completes in under 30 seconds.
+
+### 2. Configure
 
 ```bash
-# Copy the template
 cp .env.example .env
 ```
 
-Open `.env` and fill in your two keys:
-
 ```env
-TELEGRAM_BOT_TOKEN=7123456789:AAFyourtokenhere
-OPENAI_API_KEY=sk-proj-yourkeyhere
+# .env
+TELEGRAM_BOT_TOKEN=your_token_here
+OPENAI_API_KEY=your_key_here
 ```
 
-### 4. Run
+### 3. Run
 
 ```bash
 python app.py
 ```
 
-You'll see:
 ```
-INFO | Initialising RAG pipeline ...
+INFO | Initialising RAG pipeline …
 INFO | Indexed 42 chunks from 5 document(s).
 INFO | Knowledge base ready.
-INFO | Bot is polling. Press Ctrl+C to stop.
+INFO | Bot is polling.
 ```
 
-Open Telegram, search for your bot, and try:
-```
-/help
-/ask What is retrieval-augmented generation?
-/ask How does gradient descent work?
-/ask What is model drift in MLOps?
-/summarize
-```
-
----
-
-## 🐳 Docker (optional)
+### Docker
 
 ```bash
-cp .env.example .env    # fill in tokens
 docker compose up --build
 ```
 
-The `data/` folder is mounted as a volume — the SQLite DB persists across restarts.
+The `data/` directory is volume-mounted — your SQLite DB persists across container restarts.
 
 ---
 
-## 🧠 Models Used
-
-| Component | Model | Why |
-|---|---|---|
-| Embeddings | `text-embedding-3-small` | 1536-dim, fast, $0.00002/1K tokens, better than local MiniLM |
-| Generation | `gpt-3.5-turbo` | Fast, cheap, reliable. Swap for `gpt-4o` for higher quality |
-| Vector DB | SQLite + NumPy | Zero extra infrastructure. Cosine sim on normalised vecs = dot product |
-| Bot | `python-telegram-bot` v20 | Native async, clean handler API |
-
-### 💰 Cost estimate
-
-Your 5 sample docs index once at startup — roughly **$0.0001 total** (a fraction of a cent).
-Each `/ask` query costs ~$0.001 (embedding + GPT response combined).
-
----
-
-## 📁 Project Structure
+## Project Structure
 
 ```
-rag-bot-v2/
-├── app.py                   # Entry point
-├── config.py                # All settings from .env
-├── requirements.txt         # 4 dependencies only (no torch!)
+telegram-rag-pipeline/
+│
+├── app.py                    # Entry point — wires pipeline + Telegram
+├── config.py                 # Centralised settings via .env
+├── requirements.txt          # 4 dependencies only
 ├── Dockerfile
 ├── docker-compose.yml
-├── .env.example
-├── .gitignore
 │
 ├── bot/
-│   ├── __init__.py
-│   └── handlers.py          # /ask /summarize /help /start handlers
+│   └── handlers.py           # Async command handlers (/ask /summarize /help)
 │
 ├── rag/
-│   ├── __init__.py
-│   ├── chunker.py           # Word-level sliding-window chunker
-│   ├── embedder.py          # OpenAI text-embedding-3-small wrapper ← UPDATED
-│   ├── store.py             # SQLite vector store (3 tables)
-│   └── pipeline.py          # Orchestrator: embed → retrieve → generate
+│   ├── chunker.py            # Word-level sliding-window document splitter
+│   ├── embedder.py           # OpenAI text-embedding-3-small wrapper
+│   ├── store.py              # SQLite vector store — chunks, cache, history
+│   └── pipeline.py           # RAG orchestrator — embed → retrieve → generate
 │
 ├── data/
-│   └── docs/                # Your knowledge base (.md / .txt files)
+│   └── docs/                 # Knowledge base — drop .md or .txt files here
 │       ├── ai_basics_faq.md
 │       ├── llm_guide.md
 │       ├── rag_concepts.md
@@ -178,96 +194,125 @@ rag-bot-v2/
 │       └── python_ai_tips.md
 │
 └── tests/
-    ├── conftest.py
-    ├── test_chunker.py      # 9 tests
-    ├── test_store.py        # 12 tests
-    └── test_embedder.py     # 5 tests (mocked, no real API calls)
+    ├── test_chunker.py       # 9 unit tests
+    ├── test_store.py         # 12 unit tests
+    └── test_embedder.py      # 5 unit tests (OpenAI mocked)
 ```
 
 ---
 
-## ⚙️ Configuration Reference
+## Configuration
 
 | Variable | Default | Description |
 |---|---|---|
-| `TELEGRAM_BOT_TOKEN` | — | **Required** |
-| `OPENAI_API_KEY` | — | **Required** |
-| `OPENAI_MODEL` | `gpt-3.5-turbo` | Swap to `gpt-4o` for better answers |
-| `TOP_K` | `3` | Chunks retrieved per query |
-| `CHUNK_SIZE` | `300` | Words per chunk |
-| `CHUNK_OVERLAP` | `50` | Overlap words between chunks |
-| `HISTORY_SIZE` | `3` | Conversation turns injected into prompt |
-| `CACHE_THRESHOLD` | `0.95` | Cosine similarity for cache hit |
+| `TELEGRAM_BOT_TOKEN` | — | **Required.** From @BotFather |
+| `OPENAI_API_KEY` | — | **Required.** From OpenAI dashboard |
+| `OPENAI_MODEL` | `gpt-3.5-turbo` | Swap to `gpt-4o` for higher quality answers |
+| `TOP_K` | `3` | Number of chunks retrieved per query |
+| `CHUNK_SIZE` | `300` | Words per document chunk |
+| `CHUNK_OVERLAP` | `50` | Overlapping words between consecutive chunks |
+| `HISTORY_SIZE` | `3` | Conversation turns injected into each prompt |
+| `CACHE_THRESHOLD` | `0.95` | Minimum cosine similarity to trigger cache hit |
 
 ---
 
-## ➕ Adding Your Own Documents
+## Models & Cost
 
-Drop any `.md` or `.txt` file into `data/docs/` and restart the bot.
-It re-indexes automatically on startup. Delete `data/rag.db` first if you want
-to force a full re-index.
+| Component | Model | Cost |
+|---|---|---|
+| Embeddings | `text-embedding-3-small` | $0.00002 / 1K tokens |
+| Generation | `gpt-3.5-turbo` | $0.001 / 1K tokens |
+
+Full document indexing (5 docs) costs **< $0.001** and runs once at startup.  
+Each `/ask` query costs approximately **$0.001–0.002** end-to-end.
 
 ---
 
-## 🧪 Running Tests
+## Example Interaction
+
+```
+User   → /ask What is retrieval-augmented generation?
+
+Bot    → 💬 Answer:
+         RAG is an AI architecture that combines a retrieval system with a
+         generative LLM. At query time, relevant document chunks are fetched
+         from a vector store and injected into the prompt, grounding the
+         model's response in real documents rather than parametric memory.
+
+         📚 Sources: rag_concepts.md
+         📎 rag_concepts.md: "Retrieval-Augmented Generation (RAG) is an AI
+         architecture that augments an LLM's answers with relevant information
+         retrieved from an external knowledge base at query time…"
+
+─────────────────────────────────────────────────
+
+User   → /ask How does MLOps handle model drift?
+
+Bot    → 💬 Answer:
+         MLOps addresses model drift through continuous monitoring of
+         prediction distributions and input feature statistics. Alerts fire
+         when metrics deviate beyond thresholds, triggering automated
+         retraining or rollback pipelines.
+
+         📚 Sources: mlops_faq.md
+
+─────────────────────────────────────────────────
+
+User   → /summarize
+
+Bot    → 📋 Conversation Summary:
+         The user explored RAG architecture and MLOps practices around
+         drift detection. Both answers were grounded in the knowledge base.
+```
+
+---
+
+## Tests
 
 ```bash
 pip install pytest
 pytest
 ```
 
-Expected output:
 ```
-tests/test_chunker.py  .........   9 passed
-tests/test_store.py    ............  12 passed
-tests/test_embedder.py .....        5 passed
+tests/test_chunker.py   .........    9 passed
+tests/test_store.py     ............  12 passed
+tests/test_embedder.py  .....         5 passed
+
+26 passed in 1.42s
+```
+
+Test coverage includes: chunk sizing and overlap correctness, L2 normalisation, vector similarity ranking, cache hit/miss thresholds, user history scoping, and OpenAI client mocking.
+
+---
+
+## Adding Your Own Knowledge Base
+
+Drop any `.md` or `.txt` files into `data/docs/`. Delete `data/rag.db` to force a full re-index, then restart.
+
+```bash
+cp my_company_policy.md data/docs/
+rm -f data/rag.db
+python app.py
 ```
 
 ---
 
-## 📝 Example Interaction
+## Tech Stack
 
-```
-User:   /ask What is retrieval-augmented generation?
-
-Bot:    💬 Answer:
-        RAG is an AI architecture that combines a retrieval system with a
-        generative LLM. At query time, relevant document chunks are fetched
-        from a vector store and injected into the prompt, grounding the
-        model's response in real documents rather than parametric memory.
-
-        📚 Sources: rag_concepts.md
-        📎 Snippet from rag_concepts.md:
-        _Retrieval-Augmented Generation (RAG) is an AI architecture that
-        augments an LLM's answers with relevant information retrieved from
-        an external knowledge base at query time…_
-
-User:   /ask How does MLOps help with model drift?
-
-Bot:    💬 Answer:
-        MLOps addresses model drift through continuous monitoring of
-        prediction distributions and input feature statistics. When metrics
-        deviate beyond thresholds, automated alerts trigger retraining
-        or rollback pipelines.
-
-        📚 Sources: mlops_faq.md
-
-User:   /summarize
-
-Bot:    📋 Conversation Summary:
-        The user asked about RAG architecture and MLOps practices around
-        model drift detection. Both topics were answered using the
-        knowledge base documents.
-```
-
----
-
-## 🔧 Troubleshooting
-
-| Problem | Fix |
+| Layer | Technology |
 |---|---|
-| `TELEGRAM_BOT_TOKEN is not set` | Check your `.env` file exists and has the token |
-| `openai.AuthenticationError` | Your OpenAI API key is wrong or has no credits |
-| Bot doesn't respond | Make sure `python app.py` is still running |
-| `ModuleNotFoundError` | Run `pip install -r requirements.txt` inside the venv |
-| Want better answers | Change `OPENAI_MODEL=gpt-4o` in `.env` |
+| Bot framework | `python-telegram-bot` v20 |
+| Embeddings | OpenAI `text-embedding-3-small` |
+| LLM | OpenAI `gpt-3.5-turbo` |
+| Vector store | SQLite + NumPy dot product |
+| Async runtime | Python `asyncio` |
+| Containerisation | Docker + Compose |
+| Testing | `pytest` + `unittest.mock` |
+
+---
+
+## Author
+
+**RR Thivyan** — AI/ML Engineer  
+[GitHub](https://github.com/RRThivyan) · [LinkedIn](https://linkedin.com/in/thivyan-rr)
