@@ -132,12 +132,9 @@ pip install -r requirements.txt
 
 ### 2. Configure
 
-```bash
-cp .env.example .env
-```
+Create a `.env` file in the project root and add your keys:
 
 ```env
-# .env
 TELEGRAM_BOT_TOKEN=your_token_here
 OPENAI_API_KEY=your_key_here
 ```
